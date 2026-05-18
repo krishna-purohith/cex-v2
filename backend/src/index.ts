@@ -1,12 +1,25 @@
 import express, { Request, Response, NextFunction } from "express";
 import { appRouter } from "./routes";
 import { env } from "./utils/env";
+import {
+  connectRedis,
+  listenForEngineResponse,
+  pingRedis,
+} from "./utils/engine-client";
+
+await connectRedis();
+void listenForEngineResponse();
 
 const app = express();
 app.use(express.json());
 
-app.get("/health", (req, res) => {
-  res.json({ ok: true });
+app.get("/health", async (req, res) => {
+  try {
+    await pingRedis();
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: "Redis unavailable" });
+  }
 });
 
 app.use(appRouter);

@@ -1,0 +1,65 @@
+import { createClient } from "redis";
+import { env } from "./env";
+import {
+  EngineCommandType,
+  EngineRequest,
+  EngineResponse,
+} from "../types/engine";
+import {
+  resolveEngineResponse,
+  waitForEngineResponse,
+} from "../store/pending-response";
+
+const publisher = createClient({ url: env.redisURL }).on("error", (err) => {
+  console.error("Redis publisher error", err);
+});
+
+const subscriber = createClient({ url: env.redisURL }).on("error", (err) => {
+  console.error("Redis subscriber error", err);
+});
+
+export async function connectRedis(): Promise<void> {
+  await Promise.all([publisher.connect(), subscriber.connect()]);
+}
+
+export async function pingRedis(): Promise<string> {
+  return publisher.ping();
+}
+
+export async function sendToEngine(
+  type: EngineCommandType,
+  payload: Record<string, unknown>
+): Promise<EngineResponse> {
+  const correlationId = crypto.randomUUID();
+
+  const responsePromise = waitForEngineResponse(
+    correlationId,
+    env.engineTimeoutMs
+  );
+
+  const message: EngineRequest = {
+    correlationId,
+    responseQueue: env.responseQueue,
+    type,
+    payload,
+  };
+
+  await publisher.lPush(env.incomingQueue, JSON.stringify(message));
+  return responsePromise;
+}
+
+export async function listenForEngineResponse(): Promise<void> {
+  console.log(`Listening for engine response on ${env.responseQueue}`);
+
+  for (;;) {
+    const response = await subscriber.brPop(env.responseQueue, 0); // sends cmd to Redis, then yields
+    if (!response) continue;
+
+    try {
+      const parsedResponse = JSON.parse(response.element) as EngineResponse;
+      resolveEngineResponse(parsedResponse);
+    } catch (error) {
+      console.error("Invalid engine response", error);
+    }
+  }
+}
